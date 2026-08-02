@@ -67,7 +67,8 @@ An Ubuntu Server VM running a Prometheus + Grafana + Nginx monitoring stack via 
 
 --- 
 ## VM Creation
-**VM:** `WS2025-DC01` (VM ID 101) - Windows Server 2025
+**VM:** `WS2025-DC01` (VM ID 101) - Windows Server 2025 
+*this is technically exercise 2.1 - Clean Installation*
 
 Most fields were left at their defaults. The settings below are the ones that mattered
 #### OS
@@ -103,6 +104,8 @@ Most fields were left at their defaults. The settings below are the ones that ma
 After loading the "Red Hat VirtIO SCSI controller" driver, the 70GB disk appeared and installation proceeded normally.
 7. Set local Administrator password
 8. Installation completed, server rebooted into Server Manager
+
+*Saving Exercise 2.2 and 2.3 for later*
  
 ## Post-Install Configuration
  
@@ -122,13 +125,15 @@ Chose `192.168.88.250`,  just outside the upper bound of the DHCP pool, guarante
 
 IPv4 Properties:
 
-| Field | Value |
-|---|---|
-| IP address | `192.168.88.250` |
-| Subnet mask | `255.255.255.0` |
-| Default gateway | `192.168.88.1` |
-| Preferred DNS | `192.168.88.1` (router — temporary) |
-| Alternate DNS | `8.8.8.8` (fallback) |
+| Field           | Value                               |
+| --------------- | ----------------------------------- |
+| IP address      | `192.168.88.250`                    |
+| Subnet mask     | `255.255.255.0`                     |
+| Default gateway | `192.168.88.1`                      |
+| Preferred DNS   | `192.168.88.1` (router — temporary) |
+| Alternate DNS   | `8.8.8.8` (fallback)                |
+
+![](../images/IPv4-setup.png)
  
 > Note: Preferred DNS will be changed to `127.0.0.1` once AD DS + DNS roles are installed in the next stage, since the server will become authoritative for its own domain's name resolution at that point.
  
@@ -159,6 +164,96 @@ This provides a safe restore point in case later exercises (AD DS promotion, GPO
 ![](../images/Snapshot-clean-base-ready.png)
  
 ---
+## Initial Mistake: Attempting to Join a Domain That Didn't Exist
+
+Before installing the AD DS role, an attempt was made to **join** `david.local` as a domain, both via `sconfig` and GUI
+
+Both attempts failed with:
+```
+An Active Directory Domain Controller (AD DC) for the domain "david.local"
+could not be contacted.
+```
+
+**Root cause:** `david.local` didn't exist yet as an AD domain anywhere on the network, there was no domain controller to contact. "Joining" a domain assumes the domain already exists; a server doesn't join a domain to become its first domain controller. Instead, promotion is the process that creates the domain in the first place.
+## Installing the AD DS Role
  
-## Next Steps
-Continue to [`02-ad-ds-setup.md`](./02-ad-ds-setup.md) - installing Active Directory Domain Services and promoting this server to a domain controller.
+1. **Server Manager -> Manage -> Add Roles and Features**
+2. **Installation Type:** Role-based or feature-based installation
+3. **Server Selection:** `WinSrv2025-DC01` (192.168.88.250) 
+![](images/select_server_dest.png)
+4. **Server Roles:** checked **Active Directory Domain Services**
+   - Prompted to add required management tools -> **Add Features**
+5. **Features:** left at defaults
+6. **Confirmation -> Install**
+
+![](../images/AD-DS.png)
+> After installation completed, the Server Manager dashboard still showed **"Roles: 0"** and no AD DS/DNS entries in the sidebar. This was resolved with a manual refresh, the install had actually succeeded, the dashboard just hadn't refreshed automatically.
+
+**Verified the role was actually installed via PowerShell:**
+```powershell
+Get-WindowsFeature -Name AD-Domain-Services, DNS
+```
+![](images/Get-WindowsFeature.png)
+
+--- 
+## Promoting the Server to a Domain Controller
+ 
+Triggered via the notification flag in Server Manager -> **"Promote this server to a domain controller."**
+ 
+| Wizard page               | Setting                                                                     |
+| ------------------------- | --------------------------------------------------------------------------- |
+| Deployment Configuration  | **Add a new forest**, root domain name: `david.local`                       |
+| Domain Controller Options | DNS server: checked (installs DNS alongside AD DS); DSRM password set       |
+| DNS Options               | Delegation warning ignored, expected in a lab with no parent DNS zone       |
+| Additional Options        | NetBIOS name auto-filled: `DAVID`                                           |
+| Paths                     | Left at default (database, log files, SYSVOL)                               |
+| Review Options            | Confirmed all settings                                                      |
+| Prerequisites Check       | Yellow warnings present but no blocking errors — proceeded with **Install** |
+
+![](../images/upgrade.png)
+
+The server rebooted automatically once promotion completed.
+## Post-Promotion Verification
+ 
+Confirmed the domain is live:
+```powershell
+Get-ADDomain
+```
+
+![](../images/Get-ADDomain.png)
+
+## Snapshot: ad-ds-promoted
+
+ ![](../images/ad-ds-promoted-snapshot.png)
+
+---
+
+# Creating VM Windows 11 Template
+
+Same setup as the Windows Server
+
+![](../images/Win11-VM-template.png)
+
+- Installed VirtIO drivers, could not run the driver installer directly, and no internet bypass was available to create a local account or run the drivers through the normal OOBE flow. 
+
+![](../images/bypassnro.png)
+![](../images/virtioGuestInstall.png)
+
+ - Ran Windows Update, applied a quick round of updates before sysprepping.
+
+![](../images/win11-template-update.png)
+### Sysprep failed: "was not able to validate your Windows installation"
+
+![](../images/sysprepError.png)
+- Log (`C:\Windows\System32\Sysprep\Panther\setupact.log`) showed `BitLocker is on for the OS volume`. Windows 11 silently auto-enables **Device Encryption** during setup once TPM 2.0 + Secure Boot are both present.
+
+- Turned bit locker off with `manage-bde -off C:` and `manage-bde -status C:` for more accurate progress.
+
+![](../images/sysprepBitlockerError.png)
+![](images/Bitlocker-Status.png)
+![](../images/decrypted.png)
+![](../images/sysprepSuccess.png)
+
+### Windows 11 Template Complete
+
+![](../images/Win11TemplateComplete.png)
